@@ -115,10 +115,10 @@
       <WarningLevel>Level3</WarningLevel>
       <SDLCheck>true</SDLCheck>
       <PreprocessorDefinitions>_DEBUG;_CONSOLE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
-      <ConformanceMode>true</ConformanceMode>
+      <ConformanceMode>false</ConformanceMode>
     </ClCompile>
     <Link>
-      <SubSystem>Console</SubSystem>
+      <SubSystem>Windows</SubSystem>
       <GenerateDebugInformation>true</GenerateDebugInformation>
     </Link>
   </ItemDefinitionGroup>
@@ -146,6 +146,7 @@
     <ClCompile Include="..\..\_Common\GameTimer.cpp" />
     <ClCompile Include="..\..\_Common\GeometryGenerator.cpp" />
     <ClCompile Include="..\..\_Common\MathHelper.cpp" />
+    <ClCompile Include="D3DMain.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="..\..\_Common\Camera.h" />
