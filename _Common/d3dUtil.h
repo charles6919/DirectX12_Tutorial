@@ -30,6 +30,9 @@
 #include "MathHelper.h"
 
 extern const int gNumFrameResources;
+using Microsoft::WRL::ComPtr;
+using namespace std;
+using namespace DirectX;
 
 inline void d3dSetDebugName(IDXGIObject* obj, const char* name)
 {
