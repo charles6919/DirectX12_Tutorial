@@ -1,10 +1,6 @@
 #include "d3dApp.h"
 #include <windowsx.h>
 
-using Microsoft::WRL::ComPtr;
-using namespace std;
-using namespace DirectX;
-
 LRESULT CALLBACK
 MainWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
 {
@@ -423,6 +419,9 @@ bool D3DApp::InitDirect3D()
 			IID_PPV_ARGS(&md3dDevice)));
 	}
 
+	ThrowIfFailed(md3dDevice->CreateFence(0, D3D12_FENCE_FLAG_NONE,
+		IID_PPV_ARGS(&mFence)));
+
 	mRtvDescriptorSize = md3dDevice->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_RTV);
 	mDsvDescriptorSize = md3dDevice->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_DSV);
 	mCbvSrvUavDescriptorSize = md3dDevice->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
@@ -455,46 +454,199 @@ bool D3DApp::InitDirect3D()
 void D3DApp::CreateCommandObjects()
 {
 	D3D12_COMMAND_QUEUE_DESC queueDesc = {};
+	queueDesc.Type = D3D12_COMMAND_LIST_TYPE_DIRECT;
+	queueDesc.Flags = D3D12_COMMAND_QUEUE_FLAG_NONE;
+	ThrowIfFailed(md3dDevice->CreateCommandQueue(&queueDesc, IID_PPV_ARGS(&mCommandQueue)));
 
+	ThrowIfFailed(md3dDevice->CreateCommandAllocator(
+		D3D12_COMMAND_LIST_TYPE_DIRECT,
+		IID_PPV_ARGS(mDirectCmdListAlloc.GetAddressOf())));
+
+	ThrowIfFailed(md3dDevice->CreateCommandList(
+		0,
+		D3D12_COMMAND_LIST_TYPE_DIRECT,
+		mDirectCmdListAlloc.Get(),
+		nullptr,
+		IID_PPV_ARGS(mCommandList.GetAddressOf())));
+
+	//Command리스트를 닫고 시작해야한다.
+	//다시 Command를 작성할때는 닫혀있어야 하기때문이다.
+	mCommandList->Close();
 }
 
 void D3DApp::CreateSwapChain()
 {
+	//다시 만들기 위해, 이전에 있던 스왑체인을 해제한다.
+	mSwapChain.Reset();
+
+	DXGI_SWAP_CHAIN_DESC sd;
+	sd.BufferDesc.Width = mClientWidth;
+	sd.BufferDesc.Height = mClientHeight;
+	sd.BufferDesc.RefreshRate.Numerator = 60;
+	sd.BufferDesc.RefreshRate.Denominator = 1;
+	sd.BufferDesc.Format = mBackBufferFormat;
+	sd.BufferDesc.ScanlineOrdering = DXGI_MODE_SCANLINE_ORDER_UNSPECIFIED;
+	sd.BufferDesc.Scaling = DXGI_MODE_SCALING_UNSPECIFIED;
+	sd.SampleDesc.Count = m4xMsaaState ? 4 : 1;
+	sd.SampleDesc.Quality = m4xMsaaState ? (m4xMsaaQuality - 1) : 0;
+	sd.BufferUsage = DXGI_USAGE_RENDER_TARGET_OUTPUT;
+	sd.BufferCount = SwapChainBufferCount;
+	sd.OutputWindow = mhMainWnd;
+	sd.Windowed = true;
+	sd.SwapEffect = DXGI_SWAP_EFFECT_FLIP_DISCARD;
+	sd.Flags = DXGI_SWAP_CHAIN_FLAG_ALLOW_MODE_SWITCH;
+
+	ThrowIfFailed(mdxgiFactory->CreateSwapChain(
+		mCommandQueue.Get(), 
+		&sd, 
+		mSwapChain.GetAddressOf()));
 }
 
 void D3DApp::FlushCommandQueue()
 {
+	//Advance the fence value to mark commands up to this fence point.
+	mCurrentFence++;
+
+	//Command 큐에 명령을 추가하여 새 Fence 포인트를 설정해야 한다.
+	//GPU 타임라인에 있어서, Signal() 이전의 모든 명령이 처리될때까지 새 Fence 포인트가 설정되지 않기 때문이다.(무슨말이야!!)
+	ThrowIfFailed(mCommandQueue->Signal(mFence.Get(), mCurrentFence));
+
+	//GPU가 이 Fence 포인트까지 명령을 완료할때까지 기다린다.
+	if (mFence->GetCompletedValue() < mCurrentFence)
+	{
+		HANDLE eventHandle = CreateEventEx(nullptr, false, false, EVENT_ALL_ACCESS);
+
+		//GPU가 현재Fence에 도달하면 이벤트가 발생.
+		ThrowIfFailed(mFence->SetEventOnCompletion(mCurrentFence, eventHandle));
+
+		//GPU가 현재Fence에 발생한 이벤트에 도달할 때까지 대기.
+		WaitForSingleObject(eventHandle, INFINITE);
+		CloseHandle(eventHandle);
+	}
 }
 
 ID3D12Resource* D3DApp::CurrentBackBuffer() const
 {
-	return nullptr;
+	return mSwapChainBuffer[mCurrBackBuffer].Get();
 }
 
 D3D12_CPU_DESCRIPTOR_HANDLE D3DApp::CurrentBackBufferView() const
 {
-	return D3D12_CPU_DESCRIPTOR_HANDLE();
+	return CD3DX12_CPU_DESCRIPTOR_HANDLE(
+		mRtvHeap->GetCPUDescriptorHandleForHeapStart(),
+		mCurrBackBuffer,
+		mRtvDescriptorSize);
 }
 
 D3D12_CPU_DESCRIPTOR_HANDLE D3DApp::DepthStencilView() const
 {
-	return D3D12_CPU_DESCRIPTOR_HANDLE();
+	return mDsvHeap->GetCPUDescriptorHandleForHeapStart();
 }
 
 void D3DApp::CalculateFrameStats()
 {
+	//해당 코드는 초당 프레임을 계산하고, 1프레임 렌더시 걸리는 시간의 평균을 계산한다.
+	//해당 수치들은 창의 제목표시줄에 추가된다.
+
+	static int frameCnt = 0;
+	static float timeElapsed = 0.0f;
+
+	frameCnt++;
+
+	//1초동안의 프레임 시간의 평균을 계산합니다.
+	if ((mTimer.TotalTime() - timeElapsed) >= 1.0f)
+	{
+		float fps = (float)frameCnt;
+		float mspf = 1000.0f / fps;
+
+		wstring fpsStr = to_wstring(fps);
+		wstring mspfStr = to_wstring(mspf);
+
+		wstring windowText = mMainWndCaption +
+			L"	fps: " + fpsStr +
+			L"	mspf: " + mspfStr;
+
+		SetWindowText(mhMainWnd, windowText.c_str());
+
+		//다음 계산을위해 리셋
+		frameCnt = 0;
+		timeElapsed += 1.0f;
+	}
 }
 
 void D3DApp::LogAdapters()
 {
+	UINT index = 0;
+	IDXGIAdapter* adapter = nullptr;
+	vector<IDXGIAdapter*> adapterList;
+	while (mdxgiFactory->EnumAdapters(index, &adapter) != DXGI_ERROR_NOT_FOUND)
+	{
+		DXGI_ADAPTER_DESC desc;
+		adapter->GetDesc(&desc);
+
+		wstring text = L"***Adapter: ";
+		text += desc.Description;
+		text += L"\n";
+
+		OutputDebugString(text.c_str());
+
+		adapterList.push_back(adapter);
+
+		index++;
+	}
+
+	for (size_t i = 0; i < adapterList.size(); i++)
+	{
+		LogAdapterOutputs(adapterList[i]);
+		ReleaseCom(adapterList[i]);
+	}
 }
 
 void D3DApp::LogAdapterOutputs(IDXGIAdapter* adapter)
 {
+	UINT i = 0;
+	IDXGIOutput* output = nullptr;
+	while (adapter->EnumOutputs(i, &output) != DXGI_ERROR_NOT_FOUND)
+	{
+		DXGI_OUTPUT_DESC desc;
+		output->GetDesc(&desc);
+
+		wstring text = L"***Output: ";
+		text += desc.DeviceName;
+		text += L"\n";
+		OutputDebugString(text.c_str());
+
+		LogOutputDisplayModes(output, mBackBufferFormat);
+
+		ReleaseCom(output);
+
+		i++;
+	}
 }
 
 void D3DApp::LogOutputDisplayModes(IDXGIOutput* output, DXGI_FORMAT format)
 {
+	UINT count = 0;
+	UINT flags = 0;
+
+	// nullptr을 인수로 해서 호출하면 목록의 크기(모드 개수)를 얻게 된다.
+	output->GetDisplayModeList(format, flags, &count, nullptr);
+
+	vector<DXGI_MODE_DESC> modeList(count);
+	output->GetDisplayModeList(format, flags, &count, &modeList[0]);
+
+	for (auto& x : modeList)
+	{
+		UINT n = x.RefreshRate.Numerator;
+		UINT d = x.RefreshRate.Denominator;
+		wstring text =
+			L"Width = " + to_wstring(x.Width) + L" " +
+			L"Height = " + to_wstring(x.Height) + L" " +
+			L"Refresh = " + to_wstring(n) + L"/" + to_wstring(d) +
+			L"\n";
+
+		OutputDebugString(text.c_str());
+	}
 }
 
 

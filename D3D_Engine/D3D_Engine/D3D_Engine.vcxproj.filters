@@ -42,6 +42,9 @@
     <ClCompile Include="..\..\_Common\d3dApp.cpp">
       <Filter>소스 파일\_Common</Filter>
     </ClCompile>
+    <ClCompile Include="D3DMain.cpp">
+      <Filter>소스 파일</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="..\..\_Common\Camera.h">
