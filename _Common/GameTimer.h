@@ -19,12 +19,12 @@ public:
 	void Tick();  // Call every frame.
 
 private:
-	double mSecondsPerCount;
-	double mDeltaTime;
+	double mSecondsPerCount;	//틱당 초 수
+	double mDeltaTime;			//이전 프레임과 현재프레임의 경과 시간
 
-	__int64 mBaseTime;
-	__int64 mPausedTime;
-	__int64 mStopTime;
+	__int64 mBaseTime;			//타이머가 시작된 시간
+	__int64 mPausedTime;		//일시 정지된 시간(누적된 시간)
+	__int64 mStopTime;			//정지(일시 정지)된 시점의 시간
 	__int64 mPrevTime;
 	__int64 mCurrTime;
 

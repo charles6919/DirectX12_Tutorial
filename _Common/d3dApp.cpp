@@ -72,11 +72,13 @@ int D3DApp::Run()
 
 	while (msg.message != WM_QUIT)
 	{
+		//Windows 메시지가 있으면 처리한다.
 		if (PeekMessage(&msg, 0, 0, 0, PM_REMOVE))
 		{
 			TranslateMessage(&msg);
 			DispatchMessage(&msg);
 		}
+		//없다면 Direct3D 작업(게임) 작업을 수행한다.
 		else
 		{
 			mTimer.Tick();
